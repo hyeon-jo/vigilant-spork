@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QLabel, QGridLayout, QWidget, QSizePolicy
-from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtCore import Qt, Signal, Slot, QMutex, QTimer
+from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+                             QLineEdit, QLabel, QGridLayout, QWidget, QSizePolicy, QFrame,
+                             QStatusBar, QProgressBar, QGroupBox, QSplitter)
+from PySide6.QtGui import QImage, QPixmap, QFont, QColor, QPalette
+from PySide6.QtCore import Qt, Signal, Slot, QMutex, QTimer, QSize
 
 import cv2
 import os
@@ -124,109 +126,170 @@ class DATA_SEND_REQ_Header:
 class ServerStatusIndicator(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(30, 30)
+        self.setFixedSize(20, 20)
         self.set_status("disconnected")
+        self.setToolTip("Server Connection Status")
 
     def set_status(self, status):
         if status == "connected":
-            self.setStyleSheet("background-color: green; border-radius: 15px;")
+            self.setStyleSheet("""
+                QLabel {
+                    background-color: #2ecc71;
+                    border-radius: 10px;
+                    border: 2px solid #27ae60;
+                }
+            """)
         elif status == "disconnected":
-            self.setStyleSheet("background-color: red; border-radius: 15px;")
+            self.setStyleSheet("""
+                QLabel {
+                    background-color: #e74c3c;
+                    border-radius: 10px;
+                    border: 2px solid #c0392b;
+                }
+            """)
         else:
-            self.setStyleSheet("background-color: yellow; border-radius: 15px;")
+            self.setStyleSheet("""
+                QLabel {
+                    background-color: #f1c40f;
+                    border-radius: 10px;
+                    border: 2px solid #f39c12;
+                }
+            """)
 
-class LiDARDisplay(QLabel):
-    def __init__(self, parent=None):
+class VideoFrame(QLabel):
+    def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("border: 1px solid black;")
-        self.setText("LiDAR Data")
+        self.setStyleSheet("""
+            QLabel {
+                background-color: #2c3e50;
+                border: 2px solid #34495e;
+                border-radius: 5px;
+                color: #ecf0f1;
+                padding: 5px;
+                margin: 2px;
+            }
+        """)
+        self.setText(title)
+        # self.setMinimumSize(180, 120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+class LiDARDisplay(QLabel):
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("""
+            QLabel {
+                background-color: #2c3e50;
+                border: 2px solid #34495e;
+                border-radius: 5px;
+                color: #ecf0f1;
+                padding: 5px;
+                margin: 2px;
+            }
+        """)
+        self.setText(title)
+        self.setMinimumSize(160, 140)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
 class ClientDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("HADF Logging Application")
-        self.resize(1024, 768)
-        self.setMinimumSize(640, 480)  # 최소 크기 설정
+        self.resize(1280, 800)
+        self.setMinimumSize(1024, 768)
+        
+        # 타이머 설정
         self.timer = QTimer()
         self.timer.timeout.connect(self.send_divide_signal)
         self.timestamp = int(time.time_ns()) + 30000000000
 
-        
-        # Main layout
+        # 메인 레이아웃
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
+
+        # 상단 컨트롤 패널
+        control_panel = QGroupBox("Control Panel")
+        control_layout = QHBoxLayout()
         
-        # Button layout
+        # 서버 연결 설정
+        server_group = QGroupBox("Server Settings")
+        server_layout = QGridLayout()
+        
+        server1_label = QLabel("Server 1 IP:")
+        self.server1_ip_edit = QLineEdit("192.168.10.102")
+        self.server1_status_indicator = ServerStatusIndicator()
+        self.server1_status_indicator_log = ServerStatusIndicator()
+        
+        server2_label = QLabel("Server 2 IP:")
+        self.server2_ip_edit = QLineEdit("192.168.10.202")
+        self.server2_status_indicator = ServerStatusIndicator()
+        self.server2_status_indicator_log = ServerStatusIndicator()
+        
+        server_layout.addWidget(server1_label, 0, 0)
+        server_layout.addWidget(self.server1_ip_edit, 0, 1)
+        server_layout.addWidget(self.server1_status_indicator, 0, 2)
+        server_layout.addWidget(self.server1_status_indicator_log, 0, 3)
+        server_layout.addWidget(server2_label, 1, 0)
+        server_layout.addWidget(self.server2_ip_edit, 1, 1)
+        server_layout.addWidget(self.server2_status_indicator, 1, 2)
+        server_layout.addWidget(self.server2_status_indicator_log, 1, 3)
+        server_group.setLayout(server_layout)
+        
+        # 버튼 그룹
+        button_group = QGroupBox("Control")
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(10)
         
-        # Buttons
         self.connect_button = QPushButton("Connect")
         self.logging_start_button = QPushButton("Start Logging")
         self.exit_button = QPushButton("Exit")
+        
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.logging_start_button.clicked.connect(self.on_logging_start_clicked)
         self.exit_button.clicked.connect(self.close)
+        
         button_layout.addWidget(self.connect_button)
         button_layout.addWidget(self.logging_start_button)
         button_layout.addWidget(self.exit_button)
+        button_group.setLayout(button_layout)
         
-        # Server IP Input and Status layout
-        server_layout = QHBoxLayout()
-        server_layout.setContentsMargins(0, 0, 0, 0)
-        server_layout.setSpacing(10)
-        server1_label = QLabel("Server 1 IP:")
-        self.server1_ip_edit = QLineEdit("192.168.10.102")  # 기본값 설정
-        server2_label = QLabel("Server 2 IP:")
-        self.server2_ip_edit = QLineEdit("192.168.10.202")  # 기본값 설정
-        self.server1_status_indicator = ServerStatusIndicator()
-        self.server1_status_indicator_log = ServerStatusIndicator()
-        self.server2_status_indicator = ServerStatusIndicator()
-        self.server2_status_indicator_log = ServerStatusIndicator()
-        server_layout.addWidget(server1_label)
-        server_layout.addWidget(self.server1_ip_edit)
-        server_layout.addWidget(server2_label)
-        server_layout.addWidget(self.server2_ip_edit)
-        server_layout.addWidget(self.server1_status_indicator)
-        server_layout.addWidget(self.server1_status_indicator_log)
-        server_layout.addWidget(self.server2_status_indicator)
-        server_layout.addWidget(self.server2_status_indicator_log)
+        control_layout.addWidget(server_group)
+        control_layout.addWidget(button_group)
+        control_panel.setLayout(control_layout)
         
-        # Video Screens layout
+        # 비디오 프레임 그리드
+        video_group = QGroupBox("Video Stream")
         video_layout = QGridLayout()
-        video_layout.setContentsMargins(0, 0, 0, 0)
-        video_layout.setSpacing(10)
+        video_layout.setContentsMargins(5, 20, 5, 5)
+        video_layout.setSpacing(5)
         self.video_labels = []
         for i in range(12):
-            label = QLabel(f"Video {i+1}")
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet("border: 1px solid black;")
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)  # 라벨의 크기를 조정 가능하게 설정
+            label = VideoFrame(f"Camera {i+1}")
             self.video_labels.append(label)
             video_layout.addWidget(label, i // 4, i % 4)
+        video_group.setLayout(video_layout)
         
-        # LiDAR Displays layout
+        # LiDAR 디스플레이
+        lidar_group = QGroupBox("LiDAR Data")
         lidar_layout = QHBoxLayout()
-        lidar_layout.setContentsMargins(0, 0, 0, 0)
-        lidar_layout.setSpacing(10)
+        lidar_layout.setContentsMargins(5, 20, 5, 5)
+        lidar_layout.setSpacing(5)
         self.lidar_displays = []
         for i in range(5):
-            lidar_display = LiDARDisplay()
+            lidar_display = LiDARDisplay(f"LiDAR {i+1}")
             self.lidar_displays.append(lidar_display)
             lidar_layout.addWidget(lidar_display)
+        lidar_group.setLayout(lidar_layout)
         
-        # Add layouts to main layout
-        main_layout.addLayout(button_layout)
-        main_layout.addLayout(server_layout)
-        main_layout.addLayout(video_layout)
-        main_layout.addLayout(lidar_layout)  # Add LiDAR layout to main layout
+        # 레이아웃 조립
+        main_layout.addWidget(control_panel)
+        main_layout.addWidget(video_group)
+        main_layout.addWidget(lidar_group)
         
         self.setLayout(main_layout)
         
-        # State tracking
+        # 상태 추적
         self.is_logging = False
         self.server1_socket = None
         self.server2_socket = None
@@ -234,14 +297,60 @@ class ClientDialog(QDialog):
         self.server2_socket_log = None
         self.ip1_status = 0
         self.ip2_status = 0
-        self.apply_hyundai_theme()
         self.mutex_send = QMutex()
         self.mutex_receive = QMutex()
         self.server1_socket_send_thread = None
         self.server1_socket_receive_thread = None
         self.server2_socket_send_thread = None
         self.server2_socket_receive_thread = None
-    
+        
+        # 테마 적용
+        self.apply_modern_theme()
+
+    def apply_modern_theme(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a1a;
+                color: #ecf0f1;
+            }
+            QGroupBox {
+                border: 2px solid #34495e;
+                border-radius: 5px;
+                margin-top: 1em;
+                padding-top: 10px;
+                color: #ecf0f1;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px 0 3px;
+            }
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #2472a4;
+            }
+            QLineEdit {
+                background-color: #2c3e50;
+                color: #ecf0f1;
+                border: 2px solid #34495e;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QLabel {
+                color: #ecf0f1;
+            }
+        """)
+
     def send_divide_signal(self):
         print("HERE!!")
         if self.is_logging:
@@ -296,151 +405,6 @@ class ClientDialog(QDialog):
 
     def stop_logging(self):
         print()
-
-    def apply_hyundai_theme(self):
-        # 현대자동차 테마 스타일 시트
-        hyundai_theme = """
-        QMainWindow {
-            background-color: #F2F2F2;
-            color: #333333;
-        }
-        QTabWidget::pane {
-            border-top: 2px solid #0078D6;
-            background: #F2F2F2;
-        }
-        QTabBar::tab {
-            background: #F2F2F2;
-            color: #333333;
-            padding: 10px;
-            border: 1px solid #0078D6;
-            border-bottom: 1px solid #0078D6;
-        }
-        QTabBar::tab:selected, QTabBar::tab:hover {
-            background: #0078D6;
-            color: #F2F2F2;
-        }
-        QLabel {
-            color: #333333;
-        }
-        QPushButton {
-            background-color: #0078D6;
-            color: #F2F2F2;
-            border: 1px solid #333333;
-            padding: 10px 20px; /* 버튼 안쪽 여백 조정 */
-            border-radius: 5px; /* 모서리를 둥글게 만듭니다 */
-            min-height: 40px; /* 버튼의 최소 높이 설정 */
-            font-size: 14px; /* 버튼 글씨 크기 설정 */
-        }
-        QPushButton:hover {
-            background-color: #005BB5;
-        }
-        QPushButton:pressed {
-            background-color: #004A8D;
-        }
-        QLineEdit {
-            background-color: #FFFFFF;
-            color: #333333;
-            border: 1px solid #0078D6;
-            padding: 10px; /* 에디트 박스 안쪽 여백 조정 */
-            border-radius: 5px; /* 모서리를 둥글게 만듭니다 */
-            min-height: 40px; /* 에디트 박스의 최소 높이 설정 */
-            font-size: 16px; /* 에디트 박스 글씨 크기 설정 */
-        }
-        """
-        self.setStyleSheet(hyundai_theme)
-
-    def apply_cyan_theme(self):
-        # 청색 테마 스타일 시트
-        cyan_theme = """
-        QMainWindow {
-            background-color: #2c3e50;
-            color: #ecf0f1;
-        }
-        QTabWidget::pane {
-            border-top: 2px solid #34495e;
-            background: #2c3e50;
-        }
-        QTabBar::tab {
-            background: #34495e;
-            color: #ecf0f1;
-            padding: 10px;
-            border: 1px solid #2c3e50;
-            border-bottom: 1px solid #2c3e50;
-        }
-        QTabBar::tab:selected, QTabBar::tab:hover {
-            background: #2980b9;
-            color: #ecf0f1;
-        }
-        QLabel {
-            color: #ecf0f1;
-        }
-        QPushButton {
-            background-color: #2980b9;
-            color: #ecf0f1;
-            border: 1px solid #2c3e50;
-            padding: 10px 20px; /* 버튼 안쪽 여백 조정 */
-            border-radius: 10px; /* 모서리를 둥글게 만듭니다 */
-            min-height: 40px; /* 버튼의 최소 높이 설정 */
-            font-size: 20px; /* 글씨 크기 설정 */
-        }
-        QPushButton:hover {
-            background-color: #3498db;
-        }
-        QPushButton:pressed {
-            background-color: #1abc9c;
-        }
-        QLineEdit {
-            background-color: #ecf0f1;
-            color: #2c3e50;
-            border: 1px solid #34495e;
-            padding: 5px; /* 에디트 박스 안쪽 여백 조정 */
-            border-radius: 5px; /* 모서리를 둥글게 만듭니다 */
-            min-height: 40px; /* 에디트 박스의 최소 높이 설정 */
-            font-size: 20px; /* 글씨 크기 설정 */
-            
-        }
-        """
-        self.setStyleSheet(cyan_theme)
-
-    def apply_dark_theme(self):
-        # 어두운 테마 스타일 시트
-        dark_theme = """
-        QMainWindow {
-            background-color: #333;
-            color: #fff;
-        }
-        QTabWidget::pane {
-            border-top: 2px solid #666;
-            background: #333;
-        }
-        QTabBar::tab {
-            background: #555;
-            color: #fff;
-            padding: 10px;
-            border: 1px solid #444;
-            border-bottom: 1px solid #333;
-        }
-        QTabBar::tab:selected, QTabBar::tab:hover {
-            background: #777;
-            color: #fff;
-        }
-        QLabel {
-            color: #fff;
-        }
-        QPushButton {
-            background-color: #555;
-            color: #fff;
-            border: 1px solid #444;
-            padding: 5px 10px;
-        }
-        QPushButton:hover {
-            background-color: #777;
-        }
-        QPushButton:pressed {
-            background-color: #999;
-        }
-        """
-        self.setStyleSheet(dark_theme)
 
     @Slot()
     def on_connect_clicked(self):
@@ -834,31 +798,16 @@ class ClientDialog(QDialog):
     @Slot()
     def on_logging_start_clicked(self):
         if not self.is_logging:
-            # Start logging logic here
-            print("Logging started")
             self.logging_start_button.setText("Stop Logging")
             self.is_logging = True
             self.timestamp = int(time.time_ns())
-
-            #
-            """
-            HADF_LOGGING_START_CONT_REQ
-            """
-            # threading.Thread(target=self.send_to_start_logging, args=(self.server1_socket_log)).start()
-
+            
             self.send_logging_signal(message_type=19)
             self.timer.start(29900)
-            # self.send_to_start_logging(self.server2_socket_log)
-
-            
-
-            # threading.Thread(target=self.connect_to_server, args=(ip1, port, self.server1_status_indicator, 1)).start()
         else:
-            # Stop logging logic here
-            print("Logging stopped")
+            self.logging_start_button.setText("Start Logging")
             self.timer.stop()
             self.send_logging_signal(message_type=20)
-            self.logging_start_button.setText("Start Logging")
             self.is_logging = False
 
     @Slot()
@@ -893,10 +842,19 @@ class ClientDialog(QDialog):
         
         return grayscale_image
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F11:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+        super().keyPressEvent(event)
+
 if __name__ == "__main__":
     app = QApplication([])
 
     dialog = ClientDialog()
+    dialog.showMaximized()  # 창을 최대화하여 표시
 
     # Example: Load a sample image to simulate video frames
     sample_image_path = "src/python/test_7.jpg"
@@ -914,5 +872,4 @@ if __name__ == "__main__":
     else:
         print(f"Sample image not found at {sample_image_path}")
 
-    dialog.show()
     app.exec()
