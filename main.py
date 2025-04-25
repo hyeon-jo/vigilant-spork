@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QLineEdit, QLabel, QGridLayout, QWidget, QSizePolicy, QFrame,
-                             QStatusBar, QProgressBar, QGroupBox, QSplitter)
+                             QStatusBar, QProgressBar, QGroupBox, QSplitter, QTextEdit)
 from PySide6.QtGui import QImage, QPixmap, QFont, QColor, QPalette
 from PySide6.QtCore import Qt, Signal, Slot, QMutex, QTimer, QSize
 
@@ -126,7 +126,7 @@ class DATA_SEND_REQ_Header:
 class ServerStatusIndicator(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(20, 20)
+        self.setFixedSize(16, 16)
         self.set_status("disconnected")
         self.setToolTip("Server Connection Status")
 
@@ -134,25 +134,70 @@ class ServerStatusIndicator(QLabel):
         if status == "connected":
             self.setStyleSheet("""
                 QLabel {
-                    background-color: #2ecc71;
-                    border-radius: 10px;
-                    border: 2px solid #27ae60;
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #4cd964,
+                        stop: 0.6 #2ecc71,
+                        stop: 1 #27ae60
+                    );
+                    border-radius: 8px;
+                    border: 1px solid #27ae60;
+                }
+                QLabel:hover {
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #5cd964,
+                        stop: 0.6 #3ecc71,
+                        stop: 1 #37ae60
+                    );
                 }
             """)
         elif status == "disconnected":
             self.setStyleSheet("""
                 QLabel {
-                    background-color: #e74c3c;
-                    border-radius: 10px;
-                    border: 2px solid #c0392b;
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #ff3b30,
+                        stop: 0.6 #e74c3c,
+                        stop: 1 #c0392b
+                    );
+                    border-radius: 8px;
+                    border: 1px solid #c0392b;
+                }
+                QLabel:hover {
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #ff4b40,
+                        stop: 0.6 #f74c3c,
+                        stop: 1 #d0392b
+                    );
                 }
             """)
         else:
             self.setStyleSheet("""
                 QLabel {
-                    background-color: #f1c40f;
-                    border-radius: 10px;
-                    border: 2px solid #f39c12;
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #ffcc00,
+                        stop: 0.6 #f1c40f,
+                        stop: 1 #f39c12
+                    );
+                    border-radius: 8px;
+                    border: 1px solid #f39c12;
+                }
+                QLabel:hover {
+                    background-color: qradialgradient(
+                        cx: 0.5, cy: 0.5, radius: 0.8,
+                        fx: 0.5, fy: 0.5,
+                        stop: 0 #ffdc00,
+                        stop: 0.6 #f1d40f,
+                        stop: 1 #f3ac12
+                    );
                 }
             """)
 
@@ -192,6 +237,22 @@ class LiDARDisplay(QLabel):
         self.setMinimumSize(160, 140)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+class LoggingInfoDisplay(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #2c3e50;
+                color: #ecf0f1;
+                border: 2px solid #34495e;
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        self.setMinimumHeight(100)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
 class ClientDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -209,6 +270,9 @@ class ClientDialog(QDialog):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
+        # 상단 컨트롤 패널과 로깅 정보를 수평으로 배치
+        top_layout = QHBoxLayout()
+        
         # 상단 컨트롤 패널
         control_panel = QGroupBox("Control Panel")
         control_layout = QHBoxLayout()
@@ -226,6 +290,16 @@ class ClientDialog(QDialog):
         self.server2_ip_edit = QLineEdit("192.168.10.202")
         self.server2_status_indicator = ServerStatusIndicator()
         self.server2_status_indicator_log = ServerStatusIndicator()
+
+        # 메타 설명 입력
+        meta_label = QLabel("Meta Description:")
+        self.meta_description_edit = QLineEdit()
+        self.meta_description_edit.setPlaceholderText("Enter meta description (max 64 characters)")
+        self.meta_description_edit.setMaxLength(64)
+        
+        # 메타 설명 전송 버튼
+        self.send_meta_button = QPushButton("Send Meta")
+        self.send_meta_button.clicked.connect(self.send_meta_description)
         
         server_layout.addWidget(server1_label, 0, 0)
         server_layout.addWidget(self.server1_ip_edit, 0, 1)
@@ -235,11 +309,15 @@ class ClientDialog(QDialog):
         server_layout.addWidget(self.server2_ip_edit, 1, 1)
         server_layout.addWidget(self.server2_status_indicator, 1, 2)
         server_layout.addWidget(self.server2_status_indicator_log, 1, 3)
+        server_layout.addWidget(meta_label, 2, 0)
+        server_layout.addWidget(self.meta_description_edit, 2, 1, 1, 2)
+        server_layout.addWidget(self.send_meta_button, 2, 3)
         server_group.setLayout(server_layout)
         
         # 버튼 그룹
         button_group = QGroupBox("Control")
-        button_layout = QHBoxLayout()
+        button_layout = QVBoxLayout()
+        button_layout.setSpacing(5)  # 버튼 사이의 간격 설정
         
         self.connect_button = QPushButton("Connect")
         self.logging_start_button = QPushButton("Start Logging")
@@ -257,6 +335,17 @@ class ClientDialog(QDialog):
         control_layout.addWidget(server_group)
         control_layout.addWidget(button_group)
         control_panel.setLayout(control_layout)
+        
+        # 로깅 정보 표시
+        logging_info_group = QGroupBox("Logging Information")
+        logging_info_layout = QVBoxLayout()
+        self.logging_info_display = LoggingInfoDisplay()
+        logging_info_layout.addWidget(self.logging_info_display)
+        logging_info_group.setLayout(logging_info_layout)
+        
+        # Control Panel과 Logging Information을 수평으로 배치
+        top_layout.addWidget(control_panel)
+        top_layout.addWidget(logging_info_group)
         
         # 비디오 프레임 그리드
         video_group = QGroupBox("Video Stream")
@@ -282,10 +371,14 @@ class ClientDialog(QDialog):
             lidar_layout.addWidget(lidar_display)
         lidar_group.setLayout(lidar_layout)
         
+        # 비디오와 LiDAR를 수평으로 배치
+        visualization_layout = QHBoxLayout()
+        visualization_layout.addWidget(video_group)
+        visualization_layout.addWidget(lidar_group)
+        
         # 레이아웃 조립
-        main_layout.addWidget(control_panel)
-        main_layout.addWidget(video_group)
-        main_layout.addWidget(lidar_group)
+        main_layout.addLayout(top_layout)
+        main_layout.addLayout(visualization_layout)
         
         self.setLayout(main_layout)
         
@@ -742,27 +835,25 @@ class ClientDialog(QDialog):
             #     self.server2_socket_log = None
 
 
-    def send_logging_signal(self, message_type=19):
+    def send_meta_description(self):
         try:
-            print(f"start logging {self.timestamp}")
-
-            # current_time = int(time.time_ns())  # Current timestamp in milliseconds
-            # self.timestamp = current_time
-
-            # HADF_LOGGING_START_CONT_REQ 19
+            # Get meta description from UI
+            meta_description = self.meta_description_edit.text().encode('utf-8')
+            if len(meta_description) > 64:
+                meta_description = meta_description[:64]
+            elif len(meta_description) < 64:
+                meta_description = meta_description + b'\x00' * (64 - len(meta_description))
 
             header = Protocol_LoggingInfo(
                 time_stamp=self.timestamp, 
-                message_type=message_type,     # Logging start
+                message_type=19,     # Logging start
                 sequence_number=0, 
                 body_length=84,
-                time_stamp_log_start=self.timestamp if message_type == 19 else 0,
-                time_stamp_log_end=self.timestamp if message_type == 20 else 0,
+                time_stamp_log_start=self.timestamp,
+                time_stamp_log_end=0,
                 metasize=64,
-                metadescription=str("aaaaaa").encode('utf-8')
+                metadescription=meta_description
                 )
-
-            # print(self.timestamp)
 
             # 헤더 직렬화
             serialized_data = header.serialize()
@@ -774,8 +865,50 @@ class ClientDialog(QDialog):
             if self.server2_socket_log:
                 self.server2_socket_log.sendall(serialized_data)
             
-            # print('Header sent to client:', header.serialize())
+            # 입력창 초기화
+            self.meta_description_edit.clear()
+            
+            # 로깅 정보 업데이트
+            meta_text = meta_description.decode('utf-8').replace('\x00', '')
+            self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Meta description sent: {meta_text}")
+            
+            print("Meta description sent successfully")
+            
+        except Exception as e:
+            print(f"Failed to send meta description: {e}")
+            self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: {str(e)}")
 
+    def send_logging_signal(self, message_type=19):
+        try:
+            print(f"start logging {self.timestamp}")
+
+            header = Protocol_LoggingInfo(
+                time_stamp=self.timestamp, 
+                message_type=message_type,     # Logging start
+                sequence_number=0, 
+                body_length=84,
+                time_stamp_log_start=self.timestamp if message_type == 19 else 0,
+                time_stamp_log_end=self.timestamp if message_type == 20 else 0,
+                metasize=64,
+                metadescription=b'\x00' * 64  # Empty meta description
+                )
+
+            # 헤더 직렬화
+            serialized_data = header.serialize()
+
+            # 직렬화된 데이터 보내기
+            if self.server1_socket_log:
+                self.server1_socket_log.sendall(serialized_data)
+
+            if self.server2_socket_log:
+                self.server2_socket_log.sendall(serialized_data)
+            
+            # 로깅 정보 업데이트
+            if message_type == 19:
+                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Logging started")
+            else:
+                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Logging stopped")
+            
             # receive
 
             # Receive the header from the server
@@ -789,10 +922,12 @@ class ClientDialog(QDialog):
                 # print(f"받은 헤더: TimeStamp={response_header[0]}, MessageType={response_header[1]}, SequenceNumber={response_header[2]}, BodyLength={response_header[3]}, mResult={response_header[4]}")
             else:
                 print("응답 데이터를 받지 못했습니다.")
+                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: No response data received")
 
             
         except Exception as e:
             print(f"Failed to connect to Server: . Error: {e}")
+            self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: {str(e)}")
 
 
     @Slot()
