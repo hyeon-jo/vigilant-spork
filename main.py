@@ -13,6 +13,33 @@ import threading
 import time
 import numpy as np
 
+
+IDX_SERVER_1 = 1
+IDX_SERVER_2 = 2
+IDX_SERVER_1_LOG = 3
+IDX_SERVER_2_LOG = 4
+
+LOGGING_STATUS_READY = 0
+LOGGING_STATUS_SEND_MSG_TO_SERVER = 1
+LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER = 2
+
+class Protocol_Header_org:
+    def __init__(self, time_stamp=0, message_type=0, sequence_number=0, body_length=0):
+        self.time_stamp = time_stamp
+        self.message_type = message_type
+        self.sequence_number = sequence_number
+        self.body_length = body_length
+
+    def serialize(self):
+        fmt = "<QBQI"
+        return struct.pack(fmt, self.time_stamp, self.message_type, self.sequence_number, self.body_length)
+
+    @staticmethod
+    def deserialize(data):
+        fmt = "<QBQI"
+        return struct.unpack(fmt, data)
+
+
 # Protocol_Header 클래스 정의
 class Protocol_Header:
     def __init__(self, time_stamp=0, message_type=0, sequence_number=0, body_length=0, mResult=0):
@@ -392,13 +419,675 @@ class ClientDialog(QDialog):
         self.ip2_status = 0
         self.mutex_send = QMutex()
         self.mutex_receive = QMutex()
+
+        self.is_camera_on_server_1 = False
+        self.is_camera_on_server_2 = False
+
+        self.mutex_connect_server = QMutex()
+
         self.server1_socket_send_thread = None
         self.server1_socket_receive_thread = None
         self.server2_socket_send_thread = None
         self.server2_socket_receive_thread = None
         
+
+        self.server_socket = []
+        self.server_socket_log = []
+        self.server_socket_receive_thread = []
+        self.server_socket_send_thread = []
+        self.server_socket_receive_thread_log = []
+
+        self.server_socket.append(None)
+        self.server_socket.append(None)
+
+        self.server_socket_log.append(None)
+        self.server_socket_log.append(None)
+
+        self.server_1_logging_status = LOGGING_STATUS_READY
+        self.server_2_logging_status = LOGGING_STATUS_READY
+        
+
         # 테마 적용
         self.apply_modern_theme()
+
+    # START
+
+    @Slot()
+    def on_connect_clicked(self):
+        ip1 = self.server1_ip_edit.text()
+        ip2 = self.server2_ip_edit.text()
+
+        port = 9090
+        log_port = 9091
+
+        # 서버 연결 시도
+        threading.Thread(target=self.connect_to_server1, args=(ip1, port, self.server1_status_indicator, IDX_SERVER_1)).start()
+        threading.Thread(target=self.connect_to_server2, args=(ip2, port, self.server2_status_indicator, IDX_SERVER_2)).start()
+        threading.Thread(target=self.connect_to_server_log1, args=(ip1, log_port, self.server1_status_indicator_log, IDX_SERVER_1_LOG)).start()
+        threading.Thread(target=self.connect_to_server_log2, args=(ip2, log_port, self.server2_status_indicator_log, IDX_SERVER_2_LOG)).start()
+
+    def connect_to_server1(self, ip, port, status_indicator, server_id):
+        try:
+            self.mutex_connect_server.lock()
+
+            sock_server_1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock_server_1.connect((ip, port))
+            status_indicator.set_status("connected")
+            print(f"Successfully connected to Server: {ip} {port}")
+
+            self.server_socket[0] = sock_server_1
+            self.server1_socket_receive_thread = threading.Thread(target=self.receive_data_server_1, args=(sock_server_1, server_id))
+            self.server1_socket_receive_thread.start()
+            # self.server1_socket_send_thread = threading.Thread(target=self.send_data, args=(sock_server_1, server_id))
+            # self.server1_socket_send_thread.start()
+        
+            self.send_LINK_REQ(sock_server_1)
+
+            self.mutex_connect_server.unlock()
+        except Exception as e:
+            self.mutex_connect_server.unlock()
+            status_indicator.set_status("disconnected")
+            print(f"**************** Failed to connect to Server: {ip}. Error: {e}")
+
+    def connect_to_server2(self, ip, port, status_indicator, server_id):
+        try:
+            self.mutex_connect_server.lock()
+
+            sock_server_2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock_server_2.connect((ip, port))
+            status_indicator.set_status("connected")
+            print(f"Successfully connected to Server: {ip} {port}")
+
+            self.server_socket[1] = sock_server_2
+            self.server2_socket_receive_thread = threading.Thread(target=self.receive_data_server_2, args=(sock_server_2, server_id))
+            self.server2_socket_receive_thread.start()
+            # self.server2_socket_send_thread = threading.Thread(target=self.send_data, args=(sock_server_2, server_id))
+            # self.server2_socket_send_thread.start()
+
+            self.send_LINK_REQ(sock_server_2)
+
+            self.mutex_connect_server.unlock()
+        except Exception as e:
+            self.mutex_connect_server.unlock()
+            status_indicator.set_status("disconnected")
+            print(f"**************** Failed to connect to Server: {ip}. Error: {e}")
+
+    def connect_to_server_log1(self, ip, port, status_indicator, server_id):
+        try:
+            self.mutex_connect_server.lock()
+
+            sock_server_log_1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock_server_log_1.connect((ip, port))
+            status_indicator.set_status("connected")
+            print(f"Successfully connected to Server: {ip} {port}")
+
+            self.server_socket_log[0] = sock_server_log_1
+
+            self.mutex_connect_server.unlock()
+        except Exception as e:
+            self.mutex_connect_server.unlock()
+            status_indicator.set_status("disconnected")
+            print(f"**************** Failed to connect to Server: {ip}. Error: {e}")
+
+    def connect_to_server_log2(self, ip, port, status_indicator, server_id):
+        try:
+            self.mutex_connect_server.lock()
+
+            sock_server_log_2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock_server_log_2.connect((ip, port))
+            status_indicator.set_status("connected")
+            print(f"Successfully connected to Server: {ip} {port}")
+
+            self.server_socket_log[1] = sock_server_log_2
+            
+            self.mutex_connect_server.unlock()
+        except Exception as e:
+            self.mutex_connect_server.unlock()
+            status_indicator.set_status("disconnected")
+            print(f"**************** Failed to connect to Server: {ip}. Error: {e}")
+
+    def on_disconnect_clicked(self):
+        try:
+            if self.server_socket[0]:
+                self.server_socket[0].close()  # Close server1 socket if it exists
+                self.server_socket[0] = None
+
+            if self.server_socket[1]:
+                self.server_socket[1].close()  # Close server2 socket if it exists
+                self.server_socket[1] = None
+
+            
+            if self.server_socket_log[0]:
+                self.server_socket_log[0].close()  # Close server1 socket if it exists
+                self.server_socket_log[0] = None
+
+            if self.server_socket_log[1]:
+                self.server_socket_log[1].close()  # Close server2 socket if it exists
+                self.server_socket_log[1] = None
+                
+            if self.server1_socket_send_thread != None:
+                self.server1_socket_send_thread.join()
+            if self.server2_socket_send_thread != None:
+                self.server2_socket_send_thread.join()
+
+            if self.server1_socket_receive_thread != None:
+                self.server1_socket_receive_thread.join()
+            if self.server2_socket_receive_thread != None:
+                self.server2_socket_receive_thread.join()
+
+
+        except Exception as e:
+            print(f"**************** Failed to disconnect server Error: {e}")
+
+    def send_LINK_REQ(self, sock):
+        current_time = int(time.time_ns())  # Current timestamp in milliseconds
+
+        header = Protocol_Header(
+            time_stamp=current_time, 
+            message_type=1,     # LINK_REQ
+            sequence_number=0, 
+            body_length=1,
+            mResult=0)
+
+        # 헤더 직렬화
+        serialized_data = header.serialize()
+
+        # 직렬화된 데이터 보내기
+        sock.sendall(serialized_data)
+        
+        print(f'\n {sock} : [send_LINK_REQ] Header sent to client:', current_time)
+
+    def send_REC_INFO_REQ(self, sock):
+        current_time = int(time.time_ns())  # Current timestamp in milliseconds
+        header = Protocol_Header(
+            time_stamp=current_time, 
+            message_type=3,     # REC_INFO_REQ
+            sequence_number=0, 
+            body_length=1,
+            mResult=0)
+
+        # 헤더 직렬화
+        serialized_data = header.serialize()
+
+        # 직렬화된 데이터 보내기
+        sock.sendall(serialized_data)
+        
+        print('[send_REC_INFO_REQ] Header sent to client:', current_time)
+
+    def send_SEND_REQ(self, sock, sensor_on):
+
+        current_time = int(time.time_ns())
+
+            # send DATA_SEND_REQ
+        if sensor_on == 0:
+            header = DATA_SEND_REQ_Header(
+                time_stamp=current_time, 
+                message_type=17,
+                sequence_number=0, 
+                body_length=8,
+                request_status = 1,
+                data_type = 1,
+                sensor_channel = 4294967295,
+                service_id = 0, 
+                network_id = 0)
+        else:
+            header = DATA_SEND_REQ_Header(
+                time_stamp=current_time, 
+                message_type=17,
+                sequence_number=0, 
+                body_length=8,
+                request_status = 0,
+                data_type = 1,
+                sensor_channel = 4294967295,
+                service_id = 0, 
+                network_id = 0)
+
+        print(f'[send_SEND_REQ] {sock} sent to client:', current_time, "sensor channel:", header.sensor_channel)
+        # 헤더 직렬화
+        serialized_data = header.serialize()
+        # 직렬화된 데이터 보내기
+        sock.sendall(serialized_data)
+        # print('DATA_SEND_REQ_Header sent to client:', header.deserialize())
+
+    def receive_data_server_1(self, sock, server_id):
+        try:
+            while sock:
+                # self.mutex_receive.lock()
+
+                # Receive the header from the server
+                response_data = sock.recv(21)
+                print(f"[{sock}]", end=': ')
+                received_size = len(response_data)
+                response_header = []
+                if received_size == 21:
+                    # 응답 데이터 역직렬화
+                    response_header = Protocol_Header_org.deserialize(response_data)
+
+                    received_data_header =  {
+                        "TimeStamp": response_header[0],
+                        "MessageType": response_header[1],
+                        "SequenceNumber": response_header[2],
+                        "BodyLength": response_header[3]
+                    }
+
+                    body_length = int(received_data_header['BodyLength'])
+
+                    recv_data = b""
+                    data_tmp = b""
+                    while True:
+                        if (body_length) - len(recv_data) < 1024:
+                            data_tmp = sock.recv((body_length) - len(recv_data))
+                            # print("remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
+                            recv_data += data_tmp
+                            break
+
+                        data_tmp = sock.recv(1024)
+                        # print("!! remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
+                        recv_data += data_tmp
+
+                    print(f"[receive_data] Header: TimeStamp={response_header[0]}, MessageType={response_header[1]}, SequenceNumber={response_header[2]}, BodyLength={response_header[3]}, received total data size {len(recv_data)}")
+
+                    if received_data_header['MessageType'] == 2:
+                        self.send_REC_INFO_REQ(sock)
+                        self.send_SEND_REQ(sock, 0)
+                    elif received_data_header['MessageType'] == 5:
+
+                        # # current_time = int(time.time_ns()) 
+                        # # if current_time - self.pre_timestamp_for_drawing < 1000000000:
+                        # #     print(current_time, self.pre_timestamp_for_drawing, current_time - self.pre_timestamp_for_drawing)
+                        # #     continue
+
+                        # self.pre_timestamp_for_drawing = current_time
+
+                        # 구조체 정의
+                        SEND_DATA_HEADER_FORMAT = "IIIIQBBHHBBII"
+                        SEND_DATA_HEADER_SIZE = struct.calcsize(SEND_DATA_HEADER_FORMAT)
+
+                        # 헤더 파싱
+                        header = struct.unpack(SEND_DATA_HEADER_FORMAT, recv_data[:SEND_DATA_HEADER_SIZE])
+                        
+                        send_data_header =  {
+                            "mSequenceNumber": header[0],
+                            "mTotalNumber": header[1],
+                            "mCurrentNumber": header[2],
+                            "mFrameNumber": header[3],
+                            "mTimestamp": header[4],
+                            "mSensorType": header[5],
+                            "mChannel": header[6],
+                            "mImgWidth": header[7],
+                            "mImgHeight": header[8],
+                            "mImgDepth": header[9],
+                            "mImgFormat": header[10],
+                            "mNumPoints": header[11],
+                            "mPayloadSize": header[12]
+                        }
+                        # print(send_data_header)
+                        
+                        # pre_data = client_socket.recv(30)
+                        # data = client_socket.recv(1024)
+                        if send_data_header['mSensorType'] == 1:    # Sensor: CAMERA
+                                
+                            image_buffer = recv_data[SEND_DATA_HEADER_SIZE:]
+
+                            # 광각 영상에 대해서만 처리
+                            # height = 614
+                            # width = 768
+                            
+                            grayscale_image = self.yuv422uyvy_to_grayscale(image_buffer, send_data_header['mImgWidth'], send_data_header['mImgHeight'])
+
+                            # cv2.resize(grayscale_image, (int(grayscale_image.shape[1] / 4), int(grayscale_image.shape[0] / 4)))
+
+                            # cv2.imwrite(str("src/python/test_grayscale_" + str(header[4]) + ".jpg"), grayscale_image)
+                            # cv2.imshow(str("test" + str(header[4])), grayscale_image)
+                            # cv2.waitKey(10)
+                            print(str("received image data: ch " + str(header[4])))
+                            self.update_video_frame(grayscale_image, send_data_header['mChannel'])
+
+
+                        if send_data_header['mSensorType'] == 2:    # Sensor: LIDAR
+                            point_cloud_buffer = recv_data[SEND_DATA_HEADER_SIZE:]
+                            print("point_cloud_buffer length", point_cloud_buffer.__len__())
+                            print("mNumPoints", send_data_header['mNumPoints'])
+
+                            point_cloud_data = np.frombuffer(point_cloud_buffer, dtype=np.float32).reshape((send_data_header['mNumPoints'], 4))
+                            # print(point_cloud_data[0:10])
+                    elif received_data_header['MessageType'] == 25:
+                        print("\n *** ----------------- logging success", "server id:", server_id, "\n")
+                        if server_id == IDX_SERVER_1:
+                            self.server_1_logging_status = LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER
+                        if server_id == IDX_SERVER_2:
+                            self.server_2_logging_status = LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER
+
+                    # self.mutex_receive.unlock()
+
+                else:
+                    print("************ [receive_data] Error !!!! size:", len(response_data), "response_data", response_data)
+                    
+                
+        except Exception as e:
+            print(f"**************** Failed to receive data from Server {server_id}. Error: {e}")
+            # self.mutex_receive.unlock()
+        finally:
+            sock.close()
+            print(f"Connection closed with Server {server_id}")
+            if server_id == 1:
+                self.server1_status_indicator.set_status("disconnected")
+                self.server_socket[0] = None
+            elif server_id == 2:
+                self.server2_status_indicator.set_status("disconnected")
+                self.server_socket[1] = None
+            
+            # elif server_id == 3:
+            #     self.server1_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[0] = None
+            # elif server_id == 4:
+            #     self.server2_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[1] = None
+
+    def receive_data_server_2(self, sock, server_id):
+        try:
+            while sock:
+                # self.mutex_receive.lock()
+
+                # Receive the header from the server
+                response_data = sock.recv(21)
+                print(f"[{sock}]", end=': ')
+                received_size = len(response_data)
+                response_header = []
+                if received_size == 21:
+                    # 응답 데이터 역직렬화
+                    response_header = Protocol_Header_org.deserialize(response_data)
+
+                    received_data_header =  {
+                        "TimeStamp": response_header[0],
+                        "MessageType": response_header[1],
+                        "SequenceNumber": response_header[2],
+                        "BodyLength": response_header[3]
+                    }
+
+                    body_length = int(received_data_header['BodyLength'])
+
+                    recv_data = b""
+                    data_tmp = b""
+                    while True:
+                        if (body_length) - len(recv_data) < 1024:
+                            data_tmp = sock.recv((body_length) - len(recv_data))
+                            # print("remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
+                            recv_data += data_tmp
+                            break
+
+                        data_tmp = sock.recv(1024)
+                        # print("!! remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
+                        recv_data += data_tmp
+
+                    print(f"[receive_data] Header: TimeStamp={response_header[0]}, MessageType={response_header[1]}, SequenceNumber={response_header[2]}, BodyLength={response_header[3]}, received total data size {len(recv_data)}")
+
+                    if received_data_header['MessageType'] == 2:
+                        self.send_REC_INFO_REQ(sock)
+                        self.send_SEND_REQ(sock, 0)
+                    elif received_data_header['MessageType'] == 5:
+                        # 구조체 정의
+                        SEND_DATA_HEADER_FORMAT = "IIIIQBBHHBBII"
+                        SEND_DATA_HEADER_SIZE = struct.calcsize(SEND_DATA_HEADER_FORMAT)
+
+                        # 헤더 파싱
+                        header = struct.unpack(SEND_DATA_HEADER_FORMAT, recv_data[:SEND_DATA_HEADER_SIZE])
+                        
+                        send_data_header =  {
+                            "mSequenceNumber": header[0],
+                            "mTotalNumber": header[1],
+                            "mCurrentNumber": header[2],
+                            "mFrameNumber": header[3],
+                            "mTimestamp": header[4],
+                            "mSensorType": header[5],
+                            "mChannel": header[6],
+                            "mImgWidth": header[7],
+                            "mImgHeight": header[8],
+                            "mImgDepth": header[9],
+                            "mImgFormat": header[10],
+                            "mNumPoints": header[11],
+                            "mPayloadSize": header[12]
+                        }
+                        # print(send_data_header)
+                        
+                        # pre_data = client_socket.recv(30)
+                        # data = client_socket.recv(1024)
+                        if send_data_header['mSensorType'] == 1:    # Sensor: CAMERA
+                                
+                            image_buffer = recv_data[SEND_DATA_HEADER_SIZE:]
+
+                            # 광각 영상에 대해서만 처리
+                            # height = 614
+                            # width = 768
+                            
+                            grayscale_image = self.yuv422uyvy_to_grayscale(image_buffer, send_data_header['mImgWidth'], send_data_header['mImgHeight'])
+                            # cv2.imwrite(str("src/python/test_grayscale_" + str(header[4]) + ".jpg"), grayscale_image)
+                            # cv2.imshow(str("test" + str(header[4])), grayscale_image)
+                            # cv2.waitKey(10)
+                            print(str("received image data: ch " + str(header[4])))
+                            self.update_video_frame(grayscale_image, send_data_header['mChannel'])
+
+
+                        if send_data_header['mSensorType'] == 2:    # Sensor: LIDAR
+                            point_cloud_buffer = recv_data[SEND_DATA_HEADER_SIZE:]
+                            print("point_cloud_buffer length", point_cloud_buffer.__len__())
+                            print("mNumPoints", send_data_header['mNumPoints'])
+
+                            point_cloud_data = np.frombuffer(point_cloud_buffer, dtype=np.float32).reshape((send_data_header['mNumPoints'], 4))
+                            # print(point_cloud_data[0:10])
+                    elif received_data_header['MessageType'] == 25:
+                        print("\n *** ----------------- logging success", "server id:", server_id, "\n")
+                        if server_id == IDX_SERVER_1:
+                            self.server_1_logging_status = LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER
+                        if server_id == IDX_SERVER_2:
+                            self.server_2_logging_status = LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER
+
+                    # self.mutex_receive.unlock()
+
+                else:
+                    print("************ [receive_data] Error !!!! size:", len(response_data), "response_data", response_data)
+                    
+                
+        except Exception as e:
+            print(f"**************** Failed to receive data from Server {server_id}. Error: {e}")
+            # self.mutex_receive.unlock()
+        finally:
+            sock.close()
+            print(f"Connection closed with Server {server_id}")
+            if server_id == 1:
+                self.server1_status_indicator.set_status("disconnected")
+                self.server_socket[0] = None
+            elif server_id == 2:
+                self.server2_status_indicator.set_status("disconnected")
+                self.server_socket[1] = None
+            
+            # elif server_id == 3:
+            #     self.server1_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[0] = None
+            # elif server_id == 4:
+            #     self.server2_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[1] = None
+
+    def receive_data_log(self, sock, server_id):
+        try:
+            while sock:
+                
+                # self.mutex_receive_log.lock()
+
+                response_data = sock.recv(21)
+
+                received_size = len(response_data)
+                print("!!!!!! [receive_data_log] received size: ", received_size)
+
+                if received_size == 0:
+                    continue
+
+                fmt = "<QBQI"
+                # dese = struct.unpack(fmt, response_data)
+                dese = struct.unpack(fmt, response_data[0:21])
+                print(dese)
+
+                recv_data = b""
+                data_tmp = b""
+                while True:
+                    if (dese[3]) - len(recv_data) < 1024:
+                        data_tmp = sock.recv((dese[3]) - len(recv_data))
+                        recv_data += data_tmp
+                        break
+
+                    data_tmp = sock.recv(1024)
+                    recv_data += data_tmp
+                    
+                print(" recv_data total received size: ", len(recv_data))
+
+                # self.mutex_receive_log.unlock()
+
+                        
+        except Exception as e:
+            print(f"**************** Failed to receive_data_log data from Server {server_id}. Error: {e}")
+            if server_id == 3:
+                self.server1_status_indicator_log.set_status("disconnected")
+                self.server_socket_log[0] = None
+            elif server_id == 4:
+                self.server2_status_indicator_log.set_status("disconnected")
+                self.server_socket_log[1] = None
+        finally:
+            sock.close()
+            print(f"Connection closed with Server {server_id}")
+            if server_id == 3:
+                self.server1_status_indicator_log.set_status("disconnected")
+                self.server_socket_log[0] = None
+            elif server_id == 4:
+                self.server2_status_indicator_log.set_status("disconnected")
+                self.server_socket_log[1] = None
+            
+            # elif server_id == 3:
+            #     self.server1_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[0] = None
+            # elif server_id == 4:
+            #     self.server2_status_indicator_log.set_status("disconnected")
+            #     self.server_socket_log[1] = None
+
+    def send_StartLoggingMessageToServer(self):
+        try:
+            current_time = int(time.time_ns())  # Current timestamp in milliseconds
+
+            # HADF_LOGGING_START_CONT_REQ 19
+
+            header = Protocol_LoggingInfo(
+                time_stamp=current_time, 
+                message_type=19,     # Logging start
+                sequence_number=0, 
+                body_length=84,
+                time_stamp_log_start=current_time,
+                time_stamp_log_end=0,
+                metasize=64,
+                metadescription=str("aaaaaa").encode('utf-8')
+                )
+
+            print("[send_StartLoggingMessageToServer] current_time:", current_time, "messageType", 19)
+
+            # 헤더 직렬화
+            serialized_data = header.serialize()
+
+            # 직렬화된 데이터 보내기
+            if self.server_socket_log[0]:
+                self.server_1_logging_status = LOGGING_STATUS_SEND_MSG_TO_SERVER
+                self.server_socket_log[0].sendall(serialized_data)
+
+            if self.server_socket_log[1]:
+                
+                self.server_2_logging_status = LOGGING_STATUS_SEND_MSG_TO_SERVER
+                self.server_socket_log[1].sendall(serialized_data)
+            
+            curTime = int(time.time())
+            if self.server_socket_log[0]:
+                while True:
+                    time.sleep(0.5)
+                    print("\n**************** wait for receive start logging message: 1\n")
+                    # if int(time.time()) - curTime > 3:
+                    #     print("\n\n**************** Failed to logging on Server: 1\n\n")
+                    #     break
+
+                    if self.server_1_logging_status == LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER:
+                        self.server_1_logging_status = LOGGING_STATUS_READY
+                        print("*************!!! received start logging message: 1\n")
+                        break
+
+            if self.server_socket_log[1]:
+                while True:
+                    time.sleep(0.5)
+                    print("\n**************** wait for receive start logging message: 2\n")
+                    # if int(time.time()) - curTime > 3:
+                    #     print("\n\n**************** Failed to logging on Server: 2\n\n")
+                    #     break
+                    
+                    if self.server_2_logging_status == LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER:
+                        self.server_2_logging_status = LOGGING_STATUS_READY
+                        print("*************!!! received start logging message: 2\n")
+                        break
+            
+        except Exception as e:
+            print(f"**************** Failed to connect to Server: . Error: {e}")
+
+    def send_EndLoggingMessageToServer(self):
+        try:
+            current_time = int(time.time_ns())  # Current timestamp in milliseconds
+
+            # HADF_LOGGING_START_CONT_REQ 19
+
+            header = Protocol_LoggingInfo(
+                time_stamp=current_time, 
+                message_type=20,     # Logging start
+                sequence_number=0, 
+                body_length=84,
+                time_stamp_log_start=0,
+                time_stamp_log_end=current_time,
+                metasize=64,
+                metadescription=str("aaaaaa").encode('utf-8')
+                )
+
+            print("[send_EndLoggingMessageToServer] current_time:", current_time, "messageType", 20)
+
+            # 헤더 직렬화
+            serialized_data = header.serialize()
+
+            # 직렬화된 데이터 보내기
+            if self.server_socket_log[0]:
+                self.server_1_logging_status = LOGGING_STATUS_SEND_MSG_TO_SERVER
+                self.server_socket_log[0].sendall(serialized_data)
+
+            time.sleep(1)
+
+            if self.server_socket_log[1]:
+                self.server_2_logging_status = LOGGING_STATUS_SEND_MSG_TO_SERVER
+                self.server_socket_log[1].sendall(serialized_data)
+
+            curTime = int(time.time())
+            if self.server_socket_log[0]:
+                while True:
+                    time.sleep(0.5)
+                    print("\n**************** wait for receive end logging message : 1\n")
+
+                    if self.server_1_logging_status == LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER:
+                        self.server_1_logging_status = LOGGING_STATUS_READY
+                        print("*************!!! received end logging message: 1\n")
+                        break
+
+            if self.server_socket_log[1]:
+                while True:
+                    time.sleep(0.5)
+                    print("\n**************** wait for receive end logging message: 2\n")
+                    
+                    if self.server_2_logging_status == LOGGING_STATUS_RECEIVED_ACK_MSG_FROM_SERVER:
+                        self.server_2_logging_status = LOGGING_STATUS_READY
+                        print("*************!!! received end logging message: 2\n")
+                        break
+            
+            
+        except Exception as e:
+            print(f"**************** Failed to connect to Server: . Error: {e}")
+    # END
 
     def apply_modern_theme(self):
         self.setStyleSheet("""
@@ -448,392 +1137,10 @@ class ClientDialog(QDialog):
         print("HERE!!")
         if self.is_logging:
             self.timestamp = self.timestamp + 30000000000 # 30 seconds
-            self.send_logging_signal(message_type=20)
-            self.send_logging_signal(message_type=19)
-
-    def custom_close(self):
-        # Perform any cleanup or additional actions here
-        if self.is_logging:
-            self.stop_logging()  # Assuming you have a method to stop logging
-
-        if self.server1_socket:
-            self.server1_socket.close()  # Close server1 socket if it exists
-
-        if self.server2_socket:
-            self.server2_socket.close()  # Close server2 socket if it exists
-
-        
-        if self.server1_socket_log:
-            self.server1_socket_log.close()  # Close server1 socket if it exists
-
-        if self.server2_socket_log:
-            self.server2_socket_log.close()  # Close server2 socket if it exists
-
-        self.ip1_status = -1
-        self.ip2_status = -1
-
-        print("wait for close ... 3s")
-        time.sleep(3)
-
-        if self.server1_socket_send_thread != None:
-            self.server1_socket_send_thread.join()
-        if self.server2_socket_send_thread != None:
-            self.server2_socket_send_thread.join()
-
-        if self.server1_socket_receive_thread != None:
-            self.server1_socket_receive_thread.join()
-        if self.server2_socket_receive_thread != None:
-            self.server2_socket_receive_thread.join()
-
-
-        self.close()  # Call the original close method to close the dialog
-        
-
-    def closeEvent(self, event):
-        self.custom_close()
-
-        # Accept the close event to actually close the dialog
-        event.accept()
-
-
-    def stop_logging(self):
-        print()
-
-    @Slot()
-    def on_connect_clicked(self):
-        ip1 = self.server1_ip_edit.text()
-        ip2 = self.server2_ip_edit.text()
-
-        port = 9090
-        log_port = 9091
-
-        # 서버 연결 시도
-        time.sleep(0.5)
-        threading.Thread(target=self.connect_to_server, args=(ip1, port, self.server1_status_indicator, 1)).start()
-        time.sleep(0.5)
-        threading.Thread(target=self.connect_to_server, args=(ip2, port, self.server2_status_indicator, 2)).start()
-        time.sleep(0.5)
-        threading.Thread(target=self.connect_to_server, args=(ip1, log_port, self.server1_status_indicator_log, 3)).start()
-        # time.sleep(0.5)
-        # threading.Thread(target=self.connect_to_server, args=(ip2, log_port, self.server2_status_indicator_log, 4)).start()
-
-    def connect_to_server(self, ip, port, status_indicator, server_id):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((ip, port))
-            status_indicator.set_status("connected")
-            print(f"Successfully connected to Server: {ip} {port}")
-
-            if server_id == 1:
-                self.server1_socket = sock
-                self.server1_socket_receive_thread = threading.Thread(target=self.receive_data, args=(sock, 1))
-                self.server1_socket_receive_thread.start()
-                self.server1_socket_send_thread = threading.Thread(target=self.send_data, args=(sock, 1))
-                self.server1_socket_send_thread.start()
-            elif server_id == 2:
-                self.server2_socket = sock
-                self.server2_socket_receive_thread = threading.Thread(target=self.receive_data, args=(sock, 2))
-                self.server2_socket_receive_thread.start()
-                self.server2_socket_send_thread = threading.Thread(target=self.send_data, args=(sock, 2))
-                self.server2_socket_send_thread.start()
-
-            elif server_id == 3:
-                self.server1_socket_log = sock
-                # self.send_to_start_logging(sock)
-                # self.server1_socket_receive_log_thread = threading.Thread(target=self.receive_data_log, args=(sock, 1))
-                # self.server1_socket_receive_log_thread.start()
-                # self.server1_socket_send_log_thread = threading.Thread(target=self.send_data_log, args=(sock, 1))
-                # self.server1_socket_send_log_thread.start()
-
-            elif server_id == 4:
-                self.server2_socket_log = sock
-                # threading.Thread(target=self.receive_data, args=(sock, 4)).start()
-                # threading.Thread(target=self.send_data, args=(sock, 4)).start()
-
-        except Exception as e:
-            status_indicator.set_status("disconnected")
-            print(f"Failed to connect to Server: {ip}. Error: {e}")
-
-    def send_LINK_REQ(self, sock):
-        current_time = int(time.time())  # Current timestamp in milliseconds
-
-        header = Protocol_Header(
-            time_stamp=current_time, 
-            message_type=1,     # LINK_REQ
-            sequence_number=0, 
-            body_length=1,
-            mResult=0)
-        print(current_time)
-
-        # 헤더 직렬화
-        serialized_data = header.serialize()
-
-        # 직렬화된 데이터 보내기
-        sock.sendall(serialized_data)
-        
-        print('Header sent to client:', header.serialize())
-
-    def send_REC_INFO_REQ(self, sock):
-        current_time = int(time.time())  # Current timestamp in milliseconds
-        header = Protocol_Header(
-            time_stamp=current_time, 
-            message_type=3,     # REC_INFO_REQ
-            sequence_number=0, 
-            body_length=1,
-            mResult=0)
-        print(current_time)
-
-        # 헤더 직렬화
-        serialized_data = header.serialize()
-
-        # 직렬화된 데이터 보내기
-        sock.sendall(serialized_data)
-        
-        print('REC_INFO_REQ Header sent to client:', header.serialize())
-
-
-    def send_SEND_REQ(self, sock):
-
-        current_time = int(time.time())
-
-        # send DATA_SEND_REQ
-        header = DATA_SEND_REQ_Header(
-            time_stamp=current_time, 
-            message_type=17,
-            sequence_number=1, 
-            body_length=8,
-            request_status = 0,
-            data_type = 1,
-            sensor_channel = 4294967295,
-            service_id = 0, 
-            network_id = 0)
-
-        print(current_time)
-        # 헤더 직렬화
-        serialized_data = header.serialize()
-        # 직렬화된 데이터 보내기
-        sock.sendall(serialized_data)
-        print('DATA_SEND_REQ_Header sent to client:', header.serialize())
-
-
-    def send_data(self, sock, server_id):
-        try:
-            while sock:
-                # message = f"Data from Server {server_id}"
-                # sock.sendall(message.encode('utf-8'))
-                # time.sleep(1)  # 1초마다 데이터 보내기
-                
-                self.mutex_send.lock()
-
-                time.sleep(0.1)
-
-                if server_id == 1:
-                    if self.ip1_status == 0:
-                        self.send_LINK_REQ(sock)
-                        self.ip1_status = 1
-
-                    if self.ip1_status == 2:
-                        self.send_REC_INFO_REQ(sock)
-                        self.ip1_status = 3
-                        self.send_SEND_REQ(sock)
-
-                if server_id == 2:
-                    if self.ip2_status == 0:
-                        self.send_LINK_REQ(sock)
-                        self.ip2_status = 1
-
-                    if self.ip2_status == 2:
-                        self.send_REC_INFO_REQ(sock)
-                        self.ip2_status = 3
-                        self.send_SEND_REQ(sock)
-
-                if server_id == 3:
-                    print("send id 3")
-
-                if server_id == 4:
-                    print("send id 4")
-
-                self.mutex_send.unlock()
-
-                if self.ip1_status == -1 or self.ip2_status == -1:
-                    return
-
-        except Exception as e:
-            print(f"Failed to send data to Server {server_id}. Error: {e}")
-            if server_id == 1:
-                self.server1_status_indicator.set_status("disconnected")
-                self.server1_socket = None
-            elif server_id == 2:
-                self.server2_status_indicator.set_status("disconnected")
-                self.server2_socket = None
-
-        finally:
-            sock.close()
-            print(f"Connection closed with Server {server_id}")
-            if server_id == 1:
-                self.server1_status_indicator.set_status("disconnected")
-                self.server1_socket = None
-            elif server_id == 2:
-                self.server2_status_indicator.set_status("disconnected")
-                self.server2_socket = None
-       
-            # elif server_id == 3:
-            #     self.server1_status_indicator_log.set_status("disconnected")
-            #     self.server1_socket_log = None
-            # elif server_id == 4:
-            #     self.server2_status_indicator_log.set_status("disconnected")
-            #     self.server2_socket_log = None
-
-
-    def receive_LINE_ACK(self, sock):
-        # Receive the header from the server
-        response_data = sock.recv(struct.calcsize("<QBQIB"))
-        received_size = len(response_data)
-        print("!!!!!! received size: ", received_size)
-
-        if response_data:
-            # 응답 데이터 역직렬화
-            response_header = Protocol_Header.deserialize(response_data)
-            print(f"받은 헤더: TimeStamp={response_header[0]}, MessageType={response_header[1]}, SequenceNumber={response_header[2]}, BodyLength={response_header[3]}, mResult={response_header[4]}")
-        else:
-            print("응답 데이터를 받지 못했습니다.")
-
-    def receive_SENSOR_DATA(self, sock):
-        # Receive the header from the server
-        response_data = sock.recv(22)
-
-        received_size = len(response_data)
-        # print("!!!!!! received size: ", received_size)
-
-        fmt = "<QBQIB"
-        # dese = struct.unpack(fmt, response_data)
-        dese = struct.unpack(fmt, response_data[0:22])
-        # print(dese)
-
-        recv_data = b""
-        data_tmp = b""
-        while True:
-            if (dese[3] - 1) - len(recv_data) < 1024:
-                data_tmp = sock.recv((dese[3] - 1) - len(recv_data))
-                # print("remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
-                recv_data += data_tmp
-                break
-
-            data_tmp = sock.recv(1024)
-            # print("!! remained data size: ", len(data_tmp), (dese[3] - 1) - len(recv_data))
-            recv_data += data_tmp
-            
-        # print(" recv_data total received size: ", len(recv_data))
-
-        if dese[1] == 5:
-
-            # 구조체 정의
-            SEND_DATA_HEADER_FORMAT = "IIQBBHHBBII"
-            SEND_DATA_HEADER_SIZE = struct.calcsize(SEND_DATA_HEADER_FORMAT)
-
-            # 앞에 2개의 header 가 더 있지만, II 를 빼고 7 만큼 offset 해야지만 정상 출력이 가능
-
-            offset = 7
-        
-            # 헤더 파싱
-            header = struct.unpack(SEND_DATA_HEADER_FORMAT, recv_data[offset:SEND_DATA_HEADER_SIZE+offset])
-            
-            send_data_header =  {
-                "mCurrentNumber": header[0],
-                "mFrameNumber": header[1],
-                "mTimestamp": header[2],
-                "mSensorType": header[3],
-                "mChannel": header[4],
-                "mImgWidth": header[5],
-                "mImgHeight": header[6],
-                "mImgDepth": header[7],
-                "mImgFormat": header[8],
-                "mNumPoints": header[9],
-                "mPayloadSize": header[10]
-            }
-            # print(send_data_header)
-            
-            # pre_data = client_socket.recv(30)
-            # data = client_socket.recv(1024)
-            if send_data_header['mSensorType'] == 1:    # Sensor: CAMERA
-                    
-                image_buffer = recv_data[SEND_DATA_HEADER_SIZE+offset:]
-
-                # 광각 영상에 대해서만 처리
-                # height = 614
-                # width = 768
-                
-                grayscale_image = self.yuv422uyvy_to_grayscale(image_buffer, send_data_header['mImgWidth'], send_data_header['mImgHeight'])
-                # cv2.imwrite(str("src/python/test_grayscale_" + str(header[4]) + ".jpg"), grayscale_image)
-                # cv2.imshow(str("test" + str(header[4])), grayscale_image)
-                # cv2.waitKey(10)
-                # print(str("received image data: ch " + str(header[4])))
-                self.update_video_frame(grayscale_image, send_data_header['mChannel'])
-
-
-            if send_data_header['mSensorType'] == 2:    # Sensor: LIDAR
-                point_cloud_buffer = recv_data[SEND_DATA_HEADER_SIZE+offset:]
-                print("point_cloud_buffer length", point_cloud_buffer.__len__())
-                print("mNumPoints", send_data_header['mNumPoints'])
-
-                point_cloud_data = np.frombuffer(point_cloud_buffer, dtype=np.float32).reshape((send_data_header['mNumPoints'], 4))
-                # print(point_cloud_data[0:10])
-
-
-    def receive_data(self, sock, server_id):
-        try:
-            while sock:
-                
-                self.mutex_receive.lock()
-
-                time.sleep(0.1)
-
-                if server_id == 1:
-                    if self.ip1_status == 1:
-                        self.receive_LINE_ACK(sock)
-                        self.ip1_status = 2
-                                
-                    if self.ip1_status == 3:
-                        self.receive_SENSOR_DATA(sock)
-
-                if server_id == 2:
-                    if self.ip2_status == 1:
-                        self.receive_LINE_ACK(sock)
-                        self.ip2_status = 2
-                                
-                    if self.ip2_status == 3:
-                        self.receive_SENSOR_DATA(sock)
-
-                if server_id == 3:
-                    print("receive id: 3")
-
-                if server_id == 4:
-                    print("receive id: 4")
-
-                self.mutex_receive.unlock()
-
-                if self.ip1_status == -1 or self.ip2_status == -1:
-                    return
-                        
-        except Exception as e:
-            print(f"Failed to receive data from Server {server_id}. Error: {e}")
-        finally:
-            sock.close()
-            print(f"Connection closed with Server {server_id}")
-            if server_id == 1:
-                self.server1_status_indicator.set_status("disconnected")
-                self.server1_socket = None
-            elif server_id == 2:
-                self.server2_status_indicator.set_status("disconnected")
-                self.server2_socket = None
-            
-            # elif server_id == 3:
-            #     self.server1_status_indicator_log.set_status("disconnected")
-            #     self.server1_socket_log = None
-            # elif server_id == 4:
-            #     self.server2_status_indicator_log.set_status("disconnected")
-            #     self.server2_socket_log = None
-
+            # self.send_logging_signal(message_type=20)
+            self.send_EndLoggingMessageToServer()
+            # self.send_logging_signal(message_type=19)
+            self.send_StartLoggingMessageToServer()
 
     def send_meta_description(self):
         try:
@@ -878,58 +1185,6 @@ class ClientDialog(QDialog):
             print(f"Failed to send meta description: {e}")
             self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: {str(e)}")
 
-    def send_logging_signal(self, message_type=19):
-        try:
-            print(f"start logging {self.timestamp}")
-
-            header = Protocol_LoggingInfo(
-                time_stamp=self.timestamp, 
-                message_type=message_type,     # Logging start
-                sequence_number=0, 
-                body_length=84,
-                time_stamp_log_start=self.timestamp if message_type == 19 else 0,
-                time_stamp_log_end=self.timestamp if message_type == 20 else 0,
-                metasize=64,
-                metadescription=b'\x00' * 64  # Empty meta description
-                )
-
-            # 헤더 직렬화
-            serialized_data = header.serialize()
-
-            # 직렬화된 데이터 보내기
-            if self.server1_socket_log:
-                self.server1_socket_log.sendall(serialized_data)
-
-            if self.server2_socket_log:
-                self.server2_socket_log.sendall(serialized_data)
-            
-            # 로깅 정보 업데이트
-            if message_type == 19:
-                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Logging started")
-            else:
-                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Logging stopped")
-            
-            # receive
-
-            # Receive the header from the server
-            response_data = sock.recv(struct.calcsize("<QBQI"))
-            received_size = len(response_data)
-            # print("!!!!!! received size: ", received_size)
-
-            if response_data:
-                # 응답 데이터 역직렬화
-                response_header = Protocol_Header_org.deserialize(response_data)
-                # print(f"받은 헤더: TimeStamp={response_header[0]}, MessageType={response_header[1]}, SequenceNumber={response_header[2]}, BodyLength={response_header[3]}, mResult={response_header[4]}")
-            else:
-                print("응답 데이터를 받지 못했습니다.")
-                self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: No response data received")
-
-            
-        except Exception as e:
-            print(f"Failed to connect to Server: . Error: {e}")
-            self.logging_info_display.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error: {str(e)}")
-
-
     @Slot()
     def on_logging_start_clicked(self):
         if not self.is_logging:
@@ -937,12 +1192,14 @@ class ClientDialog(QDialog):
             self.is_logging = True
             self.timestamp = int(time.time_ns())
             
-            self.send_logging_signal(message_type=19)
+            # self.send_logging_signal(message_type=19)
+            self.send_StartLoggingMessageToServer()
             self.timer.start(29900)
         else:
             self.logging_start_button.setText("Start Logging")
             self.timer.stop()
-            self.send_logging_signal(message_type=20)
+            # self.send_logging_signal(message_type=20)
+            self.send_EndLoggingMessageToServer()
             self.is_logging = False
 
     @Slot()
@@ -962,7 +1219,6 @@ class ClientDialog(QDialog):
         pixmap = QPixmap.fromImage(image)
         self.video_labels[idx].setPixmap(pixmap.scaled(self.video_labels[idx].size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
-    
     def yuv422uyvy_to_grayscale(self, raw_data, width, height):
         # YUV422UYVY 데이터를 NumPy 배열로 변환합니다.
         yuv_image = np.frombuffer(raw_data, dtype=np.uint8).reshape((height, width * 2))
